@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 
 const { getDatabase, initDatabaseAsync } = require('./database');
@@ -8,114 +9,307 @@ async function seed() {
 
   console.log('Seeding database...');
 
-  // --- Coordinator account ---
-  const coordPassword = process.env.COORDINATOR_PASSWORD || 'Coord!n@t0r1';
-const existingCoord = db.prepare(
-  "SELECT id FROM accounts WHERE email = 'coordinator@tracker.local'"
-).get();
+  // ==========================================
+  // COORDINATOR ACCOUNT
+  // ==========================================
 
-const coordHash = await hashPassword(coordPassword);
+  const coordinator = {
+    name: 'Alex Morgan',
+    email: 'alex.morgan@skilltrack.com',
+    password: process.env.COORDINATOR_PASSWORD || 'Alex@Track2026!',
+    role: 'Coordinator'
+  };
 
-if (!existingCoord) {
-  db.prepare(
-    'INSERT INTO accounts (email, password_hash, role, must_change_password, password_version) VALUES (?, ?, ?, 0, 1)'
-  ).run('coordinator@tracker.local', coordHash, 'Coordinator');
+  // Find an existing coordinator, including the old demo account.
+  const existingCoordinator = db.prepare(`
+    SELECT id, email
+    FROM accounts
+    WHERE role = 'Coordinator'
+       OR email = 'coordinator@tracker.local'
+       OR email = ?
+    LIMIT 1
+  `).get(coordinator.email);
 
-  console.log('  Created coordinator account');
-} else {
-  db.prepare(
-    'UPDATE accounts SET password_hash = ?, role = ?, must_change_password = 0, password_version = 1 WHERE id = ?'
-  ).run(coordHash, 'Coordinator', existingCoord.id);
+  const coordinatorHash = await hashPassword(coordinator.password);
 
-  console.log('  Updated coordinator password');
-}
+  if (existingCoordinator) {
+    db.prepare(`
+      UPDATE accounts
+      SET email = ?,
+          password_hash = ?,
+          role = ?,
+          must_change_password = 0,
+          password_version = 1
+      WHERE id = ?
+    `).run(
+      coordinator.email,
+      coordinatorHash,
+      coordinator.role,
+      existingCoordinator.id
+    );
 
-  // --- Candidate accounts and learners ---
+    console.log('  Updated coordinator account');
+  } else {
+    db.prepare(`
+      INSERT INTO accounts
+      (email, password_hash, role, must_change_password, password_version)
+      VALUES (?, ?, ?, 0, 1)
+    `).run(
+      coordinator.email,
+      coordinatorHash,
+      coordinator.role
+    );
+
+    console.log('  Created coordinator account');
+  }
+
+  // ==========================================
+  // CANDIDATE ACCOUNTS
+  // ==========================================
+
   const candidates = [
-    { name: 'Jordan Lee', email: 'jordan.lee@example.com', cohort: 'Frontend', password: 'Candidate1!' },
-    { name: 'Morgan Chen', email: 'morgan.chen@example.com', cohort: 'Frontend', password: 'Candidate2!' },
-    { name: 'Casey Rivera', email: 'casey.rivera@example.com', cohort: 'Frontend', password: 'Candidate3!' },
+    {
+      oldEmail: 'jordan.lee@example.com',
+      oldName: 'Jordan Lee',
+      name: 'Olivia Parker',
+      email: 'olivia.parker@example.com',
+      cohort: 'Frontend',
+      password: 'Olivia@2026!'
+    },
+    {
+      oldEmail: 'morgan.chen@example.com',
+      oldName: 'Morgan Chen',
+      name: 'Ethan Brooks',
+      email: 'ethan.brooks@example.com',
+      cohort: 'Backend',
+      password: 'Ethan@2026!'
+    },
+    {
+      oldEmail: 'casey.rivera@example.com',
+      oldName: 'Casey Rivera',
+      name: 'Sophia Bennett',
+      email: 'sophia.bennett@example.com',
+      cohort: 'Full Stack',
+      password: 'Sophia@2026!'
+    }
   ];
 
   for (const candidate of candidates) {
-    const existingAccount = db.prepare('SELECT id FROM accounts WHERE email = ?').get(candidate.email);
+    const existingAccount = db.prepare(`
+      SELECT id
+      FROM accounts
+      WHERE email IN (?, ?)
+      LIMIT 1
+    `).get(candidate.email, candidate.oldEmail);
 
-    if (!existingAccount) {
-      const hash = await hashPassword(candidate.password);
-      const accountResult = db.prepare(
-        'INSERT INTO accounts (email, password_hash, role, must_change_password, password_version) VALUES (?, ?, ?, 0, 1)'
-      ).run(candidate.email, hash, 'Candidate');
+    const candidateHash = await hashPassword(candidate.password);
 
-      db.prepare(
-        'INSERT INTO learners (display_name, cohort, account_id) VALUES (?, ?, ?)'
-      ).run(candidate.name, candidate.cohort, accountResult.lastInsertRowid);
+    if (existingAccount) {
+      db.prepare(`
+        UPDATE accounts
+        SET email = ?,
+            password_hash = ?,
+            role = 'Candidate',
+            must_change_password = 0,
+            password_version = 1
+        WHERE id = ?
+      `).run(
+        candidate.email,
+        candidateHash,
+        existingAccount.id
+      );
+
+      const existingLearner = db.prepare(
+        'SELECT id FROM learners WHERE account_id = ?'
+      ).get(existingAccount.id);
+
+      if (existingLearner) {
+        db.prepare(`
+          UPDATE learners
+          SET display_name = ?, cohort = ?
+          WHERE account_id = ?
+        `).run(
+          candidate.name,
+          candidate.cohort,
+          existingAccount.id
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO learners (display_name, cohort, account_id)
+          VALUES (?, ?, ?)
+        `).run(
+          candidate.name,
+          candidate.cohort,
+          existingAccount.id
+        );
+      }
+
+      console.log(`  Updated candidate: ${candidate.name}`);
+
+    } else {
+      const accountResult = db.prepare(`
+        INSERT INTO accounts
+        (email, password_hash, role, must_change_password, password_version)
+        VALUES (?, ?, 'Candidate', 0, 1)
+      `).run(
+        candidate.email,
+        candidateHash
+      );
+
+      db.prepare(`
+        INSERT INTO learners (display_name, cohort, account_id)
+        VALUES (?, ?, ?)
+      `).run(
+        candidate.name,
+        candidate.cohort,
+        accountResult.lastInsertRowid
+      );
 
       console.log(`  Created candidate: ${candidate.name}`);
-    } else {
-      console.log(`  Candidate ${candidate.name} already exists, skipping`);
     }
   }
 
-  // --- Activities ---
+  // ==========================================
+  // ACTIVITIES
+  // ==========================================
+
   const activities = [
-    { title: 'React Basics', topic: 'Frontend', plannedHours: 6 },
-    { title: 'REST APIs', topic: 'Backend', plannedHours: 8 },
-    { title: 'SQL Foundations', topic: 'Data', plannedHours: 4 },
-    { title: 'Node.js Essentials', topic: 'Backend', plannedHours: 10 },
+    {
+      title: 'React Basics',
+      topic: 'Frontend',
+      plannedHours: 6
+    },
+    {
+      title: 'REST APIs',
+      topic: 'Backend',
+      plannedHours: 8
+    },
+    {
+      title: 'SQL Foundations',
+      topic: 'Database',
+      plannedHours: 4
+    },
+    {
+      title: 'Node.js Essentials',
+      topic: 'Backend',
+      plannedHours: 10
+    }
   ];
 
   for (const activity of activities) {
-    const existing = db.prepare('SELECT id FROM activities WHERE title = ?').get(activity.title);
+    const existing = db.prepare(
+      'SELECT id FROM activities WHERE title = ?'
+    ).get(activity.title);
+
     if (!existing) {
-      db.prepare(
-        'INSERT INTO activities (title, topic, planned_hours) VALUES (?, ?, ?)'
-      ).run(activity.title, activity.topic, activity.plannedHours);
+      db.prepare(`
+        INSERT INTO activities (title, topic, planned_hours)
+        VALUES (?, ?, ?)
+      `).run(
+        activity.title,
+        activity.topic,
+        activity.plannedHours
+      );
+
       console.log(`  Created activity: ${activity.title}`);
     } else {
-      console.log(`  Activity ${activity.title} already exists, skipping`);
+      console.log(`  Activity ${activity.title} already exists`);
     }
   }
 
-  // --- Assignments ---
-  // Helper to get IDs
+  // ==========================================
+  // ASSIGNMENTS
+  // ==========================================
+
   function getLearnerId(name) {
-    return db.prepare('SELECT id FROM learners WHERE display_name = ?').get(name)?.id;
+    return db.prepare(
+      'SELECT id FROM learners WHERE display_name = ?'
+    ).get(name)?.id;
   }
+
   function getActivityId(title) {
-    return db.prepare('SELECT id FROM activities WHERE title = ?').get(title)?.id;
+    return db.prepare(
+      'SELECT id FROM activities WHERE title = ?'
+    ).get(title)?.id;
   }
 
   const assignmentsData = [
-    { learner: 'Jordan Lee', activity: 'React Basics', status: 'In Progress' },
-    { learner: 'Jordan Lee', activity: 'REST APIs', status: 'Not Started' },
-    { learner: 'Jordan Lee', activity: 'SQL Foundations', status: 'Completed' },
-    { learner: 'Morgan Chen', activity: 'React Basics', status: 'Completed' },
-    { learner: 'Morgan Chen', activity: 'REST APIs', status: 'Completed' },
-    { learner: 'Casey Rivera', activity: 'SQL Foundations', status: 'Not Started' },
-    { learner: 'Casey Rivera', activity: 'Node.js Essentials', status: 'In Progress' },
-    { learner: 'Casey Rivera', activity: 'React Basics', status: 'Completed' },
+    {
+      learner: 'Olivia Parker',
+      activity: 'React Basics',
+      status: 'In Progress'
+    },
+    {
+      learner: 'Olivia Parker',
+      activity: 'REST APIs',
+      status: 'Not Started'
+    },
+    {
+      learner: 'Olivia Parker',
+      activity: 'SQL Foundations',
+      status: 'Completed'
+    },
+    {
+      learner: 'Ethan Brooks',
+      activity: 'React Basics',
+      status: 'Completed'
+    },
+    {
+      learner: 'Ethan Brooks',
+      activity: 'REST APIs',
+      status: 'Completed'
+    },
+    {
+      learner: 'Sophia Bennett',
+      activity: 'SQL Foundations',
+      status: 'Not Started'
+    },
+    {
+      learner: 'Sophia Bennett',
+      activity: 'Node.js Essentials',
+      status: 'In Progress'
+    },
+    {
+      learner: 'Sophia Bennett',
+      activity: 'React Basics',
+      status: 'Completed'
+    }
   ];
 
-  for (const asgn of assignmentsData) {
-    const learnerId = getLearnerId(asgn.learner);
-    const activityId = getActivityId(asgn.activity);
+  for (const assignment of assignmentsData) {
+    const learnerId = getLearnerId(assignment.learner);
+    const activityId = getActivityId(assignment.activity);
 
     if (!learnerId || !activityId) {
-      console.log(`  Skipping assignment: ${asgn.learner} -> ${asgn.activity} (missing IDs)`);
+      console.log(
+        `  Skipping assignment: ${assignment.learner}`
+      );
       continue;
     }
 
-    const existing = db.prepare(
-      'SELECT id FROM assignments WHERE learner_id = ? AND activity_id = ?'
-    ).get(learnerId, activityId);
+    const existing = db.prepare(`
+      SELECT id
+      FROM assignments
+      WHERE learner_id = ? AND activity_id = ?
+    `).get(learnerId, activityId);
 
     if (!existing) {
-      db.prepare(
-        'INSERT INTO assignments (learner_id, activity_id, status) VALUES (?, ?, ?)'
-      ).run(learnerId, activityId, asgn.status);
-      console.log(`  Created assignment: ${asgn.learner} -> ${asgn.activity} (${asgn.status})`);
+      db.prepare(`
+        INSERT INTO assignments (learner_id, activity_id, status)
+        VALUES (?, ?, ?)
+      `).run(
+        learnerId,
+        activityId,
+        assignment.status
+      );
+
+      console.log(
+        `  Created assignment: ${assignment.learner} -> ${assignment.activity}`
+      );
     } else {
-      console.log(`  Assignment ${asgn.learner} -> ${asgn.activity} already exists, skipping`);
+      console.log(
+        `  Assignment already exists: ${assignment.learner} -> ${assignment.activity}`
+      );
     }
   }
 
@@ -124,7 +318,7 @@ if (!existingCoord) {
 
 initDatabaseAsync()
   .then(() => seed())
-  .catch((err) => {
-    console.error('Seed error:', err);
+  .catch((error) => {
+    console.error('Seed error:', error);
     process.exit(1);
   });
