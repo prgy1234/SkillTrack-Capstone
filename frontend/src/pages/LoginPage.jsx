@@ -29,7 +29,10 @@ export default function LoginPage() {
       return;
     }
     const normalizedEmail = email.trim().toLowerCase();
-    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(normalizedEmail)) { setError('Enter a valid email address.'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+  setError('Enter a valid email address.');
+  return;
+}
     if (!password) { setError('Enter your password to continue.'); return; }
     setLoading(true);
     try { const user = await login(normalizedEmail,password); if (user.mustChangePassword) navigate('/change-password',{replace:true}); else navigate(user.role === 'Coordinator' ? '/dashboard' : '/my-training',{replace:true}); }
